@@ -1,0 +1,2 @@
+export const GOOGLE_CLIENT_ID = "<YOUR_GOOGLE_CLIENT_ID>"
+export const OPENAI_API_KEY = "<YOUR_OPENAI_API_KEY>"
