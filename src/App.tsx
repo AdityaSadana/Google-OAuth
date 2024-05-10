@@ -2,7 +2,8 @@ import './App.css';
 import { useState } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
 import axios from 'axios'
-import { OPENAI_API_KEY } from './secrets';
+import { MICROSOFT_CLIENT_ID, OPENAI_API_KEY } from './secrets';
+import MicrosoftLogin from "react-microsoft-login";
 
 interface IEmail {
   from: string,
@@ -13,6 +14,7 @@ interface IEmail {
 
 function App() {
 
+  const [oauthType, setOauthType] = useState<"google" | "microsoft">()
   const [accessToken, setAccessToken] = useState<string>()
   const [emails, setEmails] = useState<IEmail[]>([])
   const [selectedEmail, setSelectedEmail] = useState<IEmail>()
@@ -20,17 +22,22 @@ function App() {
   const [generatedReply, setGeneratedReply] = useState<string>()
 
   const login = useGoogleLogin({
-    onSuccess: (tokenResponse) => {setAccessToken(tokenResponse.access_token); console.log(tokenResponse)},
+    onSuccess: (tokenResponse) => {setAccessToken(tokenResponse.access_token); setOauthType("google")},
     onError: (errorResponse) => console.log(errorResponse),
     scope: "https://mail.google.com/"
   });
+
+  const authHandler = (err: any, data: any) => {
+    setOauthType("microsoft")
+    console.log(data.accessToken)
+    setAccessToken(data.accessToken)
+  }
 
   function compareEmails(email1: IEmail, email2: IEmail) {
     return email2.date - email1.date
   }
 
-  const fetchLatestEmails = () => {
-
+  const fetchEmailsFromGoogle = () => {
     axios.get(`https://gmail.googleapis.com/gmail/v1/users/me/messages?access_token=${accessToken}&maxResults=5&labelIds=INBOX`)
     .then((res) => {
       const topFive = res.data.messages
@@ -67,6 +74,40 @@ function App() {
       alert(err)
       console.error(err)
     })
+  }
+
+  const fetchEmailsFromMicrosoft = () => {
+    axios.get("https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages?$top=5&$orderby=receivedDateTime%20DESC", {
+      headers: {
+        "Authorization": `Bearer ${accessToken}`
+      }
+    })
+    .then(res => {
+      let allEmails: IEmail[] = []
+      res.data.value.map((e: any) => {
+        const date = new Date(e.receivedDateTime).getTime()
+        const body = e.bodyPreview
+        const subject = e.subject
+        const from = e.from.emailAddress.address
+
+        allEmails.push({from, subject, date, body})
+      })
+
+      setEmails(allEmails)
+    })
+  }
+
+  const fetchLatestEmails = () => {
+    if (oauthType === 'google') {
+      fetchEmailsFromGoogle()
+    }
+    else if (oauthType === 'microsoft') {
+      fetchEmailsFromMicrosoft()
+    }
+    else {
+      setAccessToken(undefined)
+      alert("Please Login Again")
+    }
   }
 
   const predictLabel = () => {
@@ -125,8 +166,8 @@ function App() {
     })
   }
 
-  const sendMessage = async () => {
-    const message = createMessage(selectedEmail!.from, selectedEmail!.subject, generatedReply!);
+  const sendMessageUsingGoogle = async () => {
+    const message = createMessage(selectedEmail!.from, `RE: ${selectedEmail?.subject}`, generatedReply!);
 
     try {
       const res = await axios.post(
@@ -147,6 +188,56 @@ function App() {
       alert('Failed to send email.');
     }
   };
+
+  const sendMessageUsingMicrosoft = () => {
+    try {
+      const graphApiEndpoint = 'https://graph.microsoft.com/v1.0/me/sendMail';
+  
+      const email = {
+        message: {
+          subject: `RE: ${selectedEmail?.subject}`,
+          body: {
+            contentType: 'Text',
+            content: generatedReply
+          },
+          toRecipients: [
+            {
+              emailAddress: {
+                address: selectedEmail?.from
+              }
+            }
+          ]
+        }
+      }
+
+      axios.post(graphApiEndpoint, email, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      })
+      .then(res => {
+        alert("Email Sent Successfully")
+      })
+    }
+    catch (error: any) {
+      alert(error.response.data.error)
+      console.error('Error sending email:', error.response.data.error);
+    }
+  }
+
+  const sendMessage = () => {
+    if (oauthType === 'google') {
+      sendMessageUsingGoogle()
+    }
+    else if (oauthType === 'microsoft') {
+      sendMessageUsingMicrosoft()
+    }
+    else {
+      setAccessToken(undefined)
+      alert("Please Login Again")
+    }
+  }
 
   const createMessage = (to: string, subject: string, body: string) => {
     const emailLines = [
@@ -242,7 +333,15 @@ function App() {
           </>
           :
           <div>
-            <button onClick={() => login()}>Login</button>
+            <button onClick={() => login()}>Login using Google</button>
+            <MicrosoftLogin 
+              clientId={MICROSOFT_CLIENT_ID}
+              className='my-[10px]'
+              graphScopes={['Mail.Send', 'Mail.ReadWrite']}
+              authCallback={authHandler}
+              children={null}
+              debug={true}
+            />
           </div>
         }
       </div>
